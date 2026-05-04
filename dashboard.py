@@ -57,7 +57,7 @@ while True:
                 color = 'red' if '🚨' in str(val) else ''
                 return f'color: {color}'
             
-            styled_df = df.style.applymap(highlight_smart_money, subset=['Smart Money Signal'])
+            styled_df = df.style.map(highlight_smart_money, subset=['Smart Money Signal'])
             st.dataframe(styled_df, use_container_width=True)
     else:
         with placeholder.container():
