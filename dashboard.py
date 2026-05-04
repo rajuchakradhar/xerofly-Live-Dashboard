@@ -1,19 +1,32 @@
 import streamlit as st
 import time
-import json
 import pandas as pd
-import os
+import yfinance as yf
 
 st.set_page_config(page_title="Zerodha Live Signal Dashboard", layout="wide")
 st.title("📈 Live Market Signals")
 
+@st.cache_data(ttl=900) # Cache data for 15 minutes (900 seconds)
 def get_latest_data():
-    if os.path.exists("live_data.json"):
-        try:
-            with open("live_data.json", "r") as f:
-                return json.load(f)
-        except:
-            return {}
+    try:
+        ticker = yf.Ticker("^NSEI")
+        data = ticker.history(period="1d")
+        if not data.empty:
+            last_price = float(data['Close'].iloc[-1])
+            volume = int(data['Volume'].iloc[-1])
+            return {
+                "256265": {
+                    "type": "INDEX",
+                    "ltp": last_price,
+                    "atm": round(last_price / 50) * 50,
+                    "iv": "-",
+                    "ltq": 0,
+                    "volume": volume,
+                    "smart_money": "Normal"
+                }
+            }
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
     return {}
 
 placeholder = st.empty()
