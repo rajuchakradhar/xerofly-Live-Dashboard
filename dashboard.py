@@ -1,120 +1,89 @@
 import streamlit as st
-import time
 import pandas as pd
-import yfinance as yf
+import json
+import os
 
-st.set_page_config(page_title="Zerodha Live Signal Dashboard", layout="wide")
-st.title("📈 Live Market Signals")
+st.set_page_config(page_title="Zerodha Live Option Chain", layout="wide")
+st.title("📈 Live Option Chain (Zerodha)")
 
-@st.cache_data(ttl=900) # Cache data for 15 minutes (900 seconds)
 def get_latest_data():
-    try:
-        ticker = yf.Ticker("^NSEI")
-        data = ticker.history(period="1d")
-        if not data.empty:
-            last_price = float(data['Close'].iloc[-1])
-            volume = int(data['Volume'].iloc[-1])
-            return {
-                "256265": {
-                    "type": "INDEX",
-                    "ltp": last_price,
-                    "atm": round(last_price / 50) * 50,
-                    "iv": "-",
-                    "ltq": 0,
-                    "volume": volume,
-                    "smart_money": "Normal"
-                }
-            }
-    except Exception as e:
-        st.error(f"Error fetching data: {e}")
+    if os.path.exists("live_data.json"):
+        try:
+            with open("live_data.json", "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
     return {}
 
-import requests
-import json
-
-@st.cache_data(ttl=60)
-def fetch_nse_option_chain():
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': '*/*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-    }
-    session = requests.Session()
-    session.headers.update(headers)
+@st.fragment(run_every="1s")
+def live_option_chain():
+    raw_data = get_latest_data()
     
-    try:
-        session.get('https://www.nseindia.com', timeout=10)
-        time.sleep(1) # wait a moment to set cookies
+    if not raw_data:
+        st.warning("Waiting for live data from main.py...")
+        return
         
-        url = 'https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY'
-        session.headers.update({'Referer': 'https://www.nseindia.com/get-quote/optionchain?symbol=NIFTY'})
-        
-        response = session.get(url, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            if 'records' in data and 'data' in data['records']:
-                return data['records']['data']
-            else:
-                return f"Error: Unexpected JSON format. Keys: {list(data.keys())}"
-        else:
-            return f"HTTP {response.status_code}: {response.text[:100]}"
-    except Exception as e:
-        return str(e)
-
-raw_data = get_latest_data()
-
-st.subheader("Live Tracking Table (Nifty 50 Spot)")
-if raw_data:
-    table_data = []
+    # Split data into Spot and Options
+    spot_data = None
+    options_data = []
+    
     for token, details in raw_data.items():
-        table_data.append({
-            "Token": token,
-            "Type": details.get("type", "UNKNOWN"),
-            "LTP": round(details.get("ltp", 0), 2),
-            "ATM Strike": details.get("atm", "-"),
-            "Implied Volatility (%)": details.get("iv", "-"),
-            "Last Traded Qty (LTQ)": details.get("ltq", 0),
-            "Total Volume": details.get("volume", 0),
-            "Smart Money Signal": details.get("smart_money", "Normal")
-        })
-    df = pd.DataFrame(table_data)
-    
-    def highlight_smart_money(val):
-        color = 'red' if '🚨' in str(val) else ''
-        return f'color: {color}'
-    
-    styled_df = df.style.map(highlight_smart_money, subset=['Smart Money Signal'])
-    st.dataframe(styled_df, use_container_width=True)
-else:
-    st.warning("Waiting for live data...")
-
-st.markdown("---")
-st.subheader("Experimental: NSE Option Chain Fetcher")
-st.write("Clicking this will attempt to fetch the latest Nifty Option Chain directly from NSE. **Note:** This may fail on Streamlit Cloud due to NSE bot protection.")
-
-if st.button("Fetch NSE Option Chain (Once)"):
-    with st.spinner("Attempting to connect to NSE..."):
-        result = fetch_nse_option_chain()
-        if isinstance(result, list):
-            st.success(f"Successfully fetched {len(result)} strikes from NSE!")
+        if str(token) == "256265" or details.get("type") == "INDEX":
+            spot_data = details
+        elif "OPT" in str(details.get("type", "")):
+            options_data.append(details)
             
-            # Format option chain for display
-            oc_data = []
-            for item in result:
-                ce = item.get('CE', {})
-                pe = item.get('PE', {})
-                oc_data.append({
-                    "CE Open Interest": ce.get('openInterest', 0),
-                    "CE LTP": ce.get('lastPrice', 0),
-                    "Strike": item.get('strikePrice', 0),
-                    "PE LTP": pe.get('lastPrice', 0),
-                    "PE Open Interest": pe.get('openInterest', 0),
-                    "Expiry": item.get('expiryDate', '')
-                })
+    # Show Spot Price
+    if spot_data:
+        st.subheader(f"NIFTY 50 Spot: {round(spot_data.get('ltp', 0), 2)}")
+        
+    if not options_data:
+        st.info("No option data streaming yet. Waiting for WebSocket...")
+        return
+        
+    # Build Option Chain Table
+    # We will format it like a traditional option chain: CE on left, PE on right, Strike in middle
+    strikes = {}
+    
+    for opt in options_data:
+        # type looks like "OPT 24000 C"
+        parts = opt.get("type", "").split()
+        if len(parts) >= 3:
+            strike = int(float(parts[1]))
+            opt_type = parts[2]
+            
+            if strike not in strikes:
+                strikes[strike] = {"Strike": strike}
                 
-            oc_df = pd.DataFrame(oc_data)
-            st.dataframe(oc_df)
-        else:
-            st.error(f"Failed to fetch Option Chain. NSE Blocked the Request.\n\nReason: {result}")
+            if opt_type == "C" or opt_type == "CE":
+                strikes[strike]["CE LTP"] = round(opt.get("ltp", 0), 2)
+                strikes[strike]["CE Vol"] = opt.get("volume", 0)
+                strikes[strike]["CE IV"] = opt.get("iv", 0)
+                strikes[strike]["CE Signal"] = opt.get("smart_money", "Normal")
+            else:
+                strikes[strike]["PE LTP"] = round(opt.get("ltp", 0), 2)
+                strikes[strike]["PE Vol"] = opt.get("volume", 0)
+                strikes[strike]["PE IV"] = opt.get("iv", 0)
+                strikes[strike]["PE Signal"] = opt.get("smart_money", "Normal")
+                
+    # Create DataFrame
+    df = pd.DataFrame(list(strikes.values()))
+    if not df.empty:
+        df = df.sort_values("Strike").reset_index(drop=True)
+        
+        # Ensure all columns exist
+        cols = ["CE Signal", "CE Vol", "CE IV", "CE LTP", "Strike", "PE LTP", "PE IV", "PE Vol", "PE Signal"]
+        for c in cols:
+            if c not in df.columns:
+                df[c] = "-"
+                
+        df = df[cols]
+        
+        def highlight_signals(val):
+            color = 'red' if '🚨' in str(val) else ''
+            return f'color: {color}'
+            
+        styled_df = df.style.map(highlight_signals, subset=['CE Signal', 'PE Signal'])
+        st.dataframe(styled_df, use_container_width=True, height=600)
+
+live_option_chain()
