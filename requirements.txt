@@ -1,0 +1,6 @@
+kiteconnect
+pandas
+streamlit
+py_vollib
+yfinance
+schedule

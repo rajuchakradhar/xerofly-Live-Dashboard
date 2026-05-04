@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.env
+live_data.json
+config.py
+test_token.py
